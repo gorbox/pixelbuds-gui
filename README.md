@@ -7,7 +7,7 @@ It drives the [`pbpctrl`](https://github.com/qzed/pbpctrl) CLI, which
 implements the reverse-engineered Google "Maestro" + GFPS protocols over
 Bluetooth RFCOMM. This project is the GUI on top of that.
 
-![status](https://img.shields.io/badge/status-working%20skeleton-yellow)
+![status](https://img.shields.io/badge/status-working-green)
 
 ## Features
 

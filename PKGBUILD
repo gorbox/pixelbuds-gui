@@ -1,22 +1,19 @@
-# Maintainer: pixelbuds-gui contributors
+# Maintainer: gorbox <https://github.com/gorbox>
 # AUR-style package for Arch / CachyOS. Uses the system python3 + pyside6.
 #
 # To install from a local clone of the repo:
 #   makepkg -si
-#
-# To publish to the AUR, first replace the placeholder URL below with your
-# real repo URL and provide a proper sha256sum (run `makepkg -g`).
 
 pkgname=pixelbuds-gui
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Desktop GUI to control Google Pixel Buds Pro on Linux"
 arch=('any')
-url="https://github.com/YOURNAME/pixelbuds-gui"
+url="https://github.com/gorbox/pixelbuds-gui"
 license=('MIT')
 depends=('pbpctrl' 'pyside6')
-source=("$pkgname-$pkgver.tar.gz::https://github.com/YOURNAME/$pkgname/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/gorbox/$pkgname/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('78eda26897724efdeded363e3c476f71fafbd03d9f89c4e54821bd6336b67586')
 
 package() {
     cd "$srcdir/$pkgname-$pkgver"
