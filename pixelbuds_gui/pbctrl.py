@@ -1,0 +1,257 @@
+"""Backend wrapper around the `pbpctrl` CLI (qzed/pbpctrl).
+
+All communication with the buds goes through the `pbpctrl` binary. This module
+invokes it via subprocess and parses its human-readable output into typed
+Python values. It is deliberately free of any Qt imports so it can be unit
+tested and reused independently of the GUI.
+"""
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass
+from typing import Optional
+
+PBPCTRL = shutil.which("pbpctrl") or "pbpctrl"
+
+# If set, always pass this address to pbpctrl (e.g. "AA:BB:CC:DD:EE:FF").
+# If None, pbpctrl auto-detects the paired buds.
+DEFAULT_DEVICE: Optional[str] = None
+
+# ANC states understood by `pbpctrl set anc <state>`.
+ANC_STATES = ("off", "active", "aware", "adaptive")
+
+# Actions understood by `pbpctrl set gesture-control <left> <right>`.
+GESTURE_ACTIONS = (
+    "anc",
+    "assistant",
+    "check-notifications",
+    "previous",
+    "next",
+    "play-pause",
+)
+
+# The four ANC modes that participate in the ANC gesture loop.
+# NOTE: order matters for `set anc-gesture-loop <off> <active> <aware> <adaptive>`.
+ANC_LOOP_MODES = ("off", "active", "aware", "adaptive")
+
+# Boolean settings exposed by `pbpctrl get/set <name> <true|false>`.
+BOOL_SETTINGS = (
+    "auto-ota",
+    "ohd",
+    "gestures",
+    "diagnostics",
+    "multipoint",
+    "volume-eq",
+    "mono",
+    "volume-exposure-notifications",
+    "speech-detection",
+)
+
+
+class PbctrlError(Exception):
+    """Raised when pbpctrl fails for any reason."""
+
+
+class NoDeviceError(PbctrlError):
+    """Raised when no compatible Pixel Buds are paired / reachable."""
+
+
+def _run(*args: str, device: Optional[str] = None, timeout: float = 20.0) -> str:
+    cmd = [PBPCTRL]
+    dev = device if device is not None else DEFAULT_DEVICE
+    if dev:
+        cmd += ["--device", dev]
+    cmd += [str(a) for a in args]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError as exc:  # pragma: no cover - depends on env
+        raise PbctrlError(
+            "pbpctrl not found on PATH. Install it with: paru -S pbpctrl"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise PbctrlError(f"pbpctrl timed out after {timeout:.0f}s") from exc
+
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "").strip()
+        low = msg.lower()
+        if "no compatible device" in low or "no default adapter" in low or "not available" in low:
+            raise NoDeviceError(msg or "no Pixel Buds found")
+        raise PbctrlError(msg or f"pbpctrl exited with code {proc.returncode}")
+
+    return proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# Models
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class BatteryInfo:
+    level: Optional[int] = None
+    state: Optional[str] = None  # "charging" | "not charging" | "unknown"
+
+
+@dataclass
+class BatteryReport:
+    case: Optional[BatteryInfo] = None
+    left: Optional[BatteryInfo] = None
+    right: Optional[BatteryInfo] = None
+
+
+# --------------------------------------------------------------------------- #
+# Parsers
+# --------------------------------------------------------------------------- #
+
+_BAT_LINE = re.compile(r"^(case|left bud|right bud):\s*(.+)$")
+_BAT_VAL = re.compile(r"^(\d+)%\s*\(([^)]*)\)$")
+
+
+def parse_battery(text: str) -> BatteryReport:
+    rep = BatteryReport()
+    for raw in text.splitlines():
+        m = _BAT_LINE.match(raw.strip())
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        info: Optional[BatteryInfo] = None
+        bm = _BAT_VAL.match(val)
+        if bm:
+            info = BatteryInfo(level=int(bm.group(1)), state=bm.group(2) or None)
+        if key == "case":
+            rep.case = info
+        elif key == "left bud":
+            rep.left = info
+        elif key == "right bud":
+            rep.right = info
+    return rep
+
+
+def parse_anc(text: str) -> str:
+    return (text.strip().split() or ["unknown"])[0]
+
+
+def parse_eq(text: str) -> list[float]:
+    nums = re.findall(r"-?\d+(?:\.\d+)?", text)
+    return [float(x) for x in nums[:5]]
+
+
+def parse_balance(text: str) -> int:
+    m = re.search(r"left:\s*(\d+)%,\s*right:\s*(\d+)%", text)
+    if not m:
+        return 0
+    left, right = int(m.group(1)), int(m.group(2))
+    if left < 100:      # positive asymmetry: value = 100 - left
+        return 100 - left
+    if right < 100:     # negative asymmetry: value = right - 100
+        return right - 100
+    return 0
+
+
+def parse_gesture_control(text: str) -> tuple[str, str]:
+    m = re.search(r"left:\s*(\S+),\s*right:\s*(\S+)", text)
+    if not m:
+        return ("anc", "anc")
+    return m.group(1), m.group(2)
+
+
+def parse_anc_loop(text: str) -> dict[str, bool]:
+    inner = text.strip().strip("[]")
+    enabled = {x.strip() for x in inner.split(",") if x.strip()}
+    return {m: (m in enabled) for m in ANC_LOOP_MODES}
+
+
+def parse_keyed(text: str) -> dict[str, str]:
+    """Parse simple 'key: value' blocks (show software / show hardware)."""
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if ":" not in line:
+            continue
+        key, val = line.split(":", 1)
+        out[key.strip()] = val.strip()
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# High-level operations
+# --------------------------------------------------------------------------- #
+
+def get_battery(device: Optional[str] = None) -> BatteryReport:
+    return parse_battery(_run("show", "battery", device=device))
+
+
+def get_anc(device: Optional[str] = None) -> str:
+    return parse_anc(_run("get", "anc", device=device))
+
+
+def get_eq(device: Optional[str] = None) -> list[float]:
+    return parse_eq(_run("get", "eq", device=device))
+
+
+def get_balance(device: Optional[str] = None) -> int:
+    return parse_balance(_run("get", "balance", device=device))
+
+
+def get_gesture_control(device: Optional[str] = None) -> tuple[str, str]:
+    return parse_gesture_control(_run("get", "gesture-control", device=device))
+
+
+def get_anc_loop(device: Optional[str] = None) -> dict[str, bool]:
+    return parse_anc_loop(_run("get", "anc-gesture-loop", device=device))
+
+
+def get_bool(name: str, device: Optional[str] = None) -> bool:
+    return _run("get", name, device=device).strip().lower() == "true"
+
+
+def get_firmware(device: Optional[str] = None) -> dict[str, str]:
+    """Return {'case': ver, 'left bud': ver, 'right bud': ver}."""
+    return parse_keyed(_run("show", "software", device=device))
+
+
+def get_serials(device: Optional[str] = None) -> dict[str, str]:
+    return parse_keyed(_run("show", "hardware", device=device))
+
+
+# --- setters -------------------------------------------------------------- #
+
+def set_anc(state: str, device: Optional[str] = None) -> None:
+    if state not in ANC_STATES:
+        raise ValueError(f"invalid ANC state: {state}")
+    _run("set", "anc", state, device=device)
+
+
+def cycle_anc(device: Optional[str] = None) -> None:
+    _run("set", "anc", "cycle-next", device=device)
+
+
+def set_eq(bands, device: Optional[str] = None) -> None:
+    if len(bands) != 5:
+        raise ValueError("EQ requires exactly 5 bands")
+    _run("set", "eq", *[f"{float(b):.2f}" for b in bands], device=device)
+
+
+def set_balance(value: int, device: Optional[str] = None) -> None:
+    _run("set", "balance", str(int(value)), device=device)
+
+
+def set_bool(name: str, value: bool, device: Optional[str] = None) -> None:
+    _run("set", name, "true" if value else "false", device=device)
+
+
+def set_gesture_control(left: str, right: str, device: Optional[str] = None) -> None:
+    if left not in GESTURE_ACTIONS or right not in GESTURE_ACTIONS:
+        raise ValueError(f"invalid gesture action: {left}, {right}")
+    _run("set", "gesture-control", left, right, device=device)
+
+
+def set_anc_loop(modes: dict[str, bool], device: Optional[str] = None) -> None:
+    enabled = [m for m in ANC_LOOP_MODES if modes.get(m)]
+    if len(enabled) < 2:
+        raise ValueError("ANC gesture loop requires at least 2 enabled modes")
+    args = ["true" if modes.get(m) else "false" for m in ANC_LOOP_MODES]
+    # pbpctrl expects: set anc-gesture-loop <off> <active> <aware> <adaptive>
+    _run("set", "anc-gesture-loop", *args, device=device)
