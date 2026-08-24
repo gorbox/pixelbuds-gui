@@ -128,10 +128,18 @@ def parse_battery(text: str) -> BatteryReport:
         if not m:
             continue
         key, val = m.group(1), m.group(2).strip()
-        info: Optional[BatteryInfo] = None
         bm = _BAT_VAL.match(val)
         if bm:
-            info = BatteryInfo(level=int(bm.group(1)), state=bm.group(2) or None)
+            info: Optional[BatteryInfo] = BatteryInfo(
+                level=int(bm.group(1)), state=bm.group(2) or None
+            )
+        elif val == "unknown":
+            info = None
+        else:
+            # Not a battery line. `show runtime` also emits a `placement:`
+            # block whose values are "in case" / "out of case" -- those must
+            # not overwrite the battery fields already parsed above.
+            continue
         if key == "case":
             rep.case = info
         elif key == "left bud":
@@ -215,6 +223,20 @@ def get_battery(device: Optional[str] = None) -> BatteryReport:
 
 def get_placement(device: Optional[str] = None) -> PlacementReport:
     return parse_placement(_run("show", "runtime", device=device))
+
+
+def get_runtime(device: Optional[str] = None) -> tuple[BatteryReport, PlacementReport]:
+    """Fetch battery + placement from a single `pbpctrl show runtime` call.
+
+    `show runtime` reports both the battery info and the per-bud placement in
+    one runtime-info event, so a single connection yields a consistent snapshot
+    of the two. Using one call instead of `get_battery()` + `get_placement()`
+    also halves the number of RFCOMM handshakes -- important because the buds
+    hand the maestro connection off between each other and can reset it mid-
+    handoff, which occasionally made the two values disagree.
+    """
+    text = _run("show", "runtime", device=device)
+    return parse_battery(text), parse_placement(text)
 
 
 def get_anc(device: Optional[str] = None) -> str:

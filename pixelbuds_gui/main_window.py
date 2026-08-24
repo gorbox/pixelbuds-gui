@@ -246,20 +246,26 @@ class MainWindow(QMainWindow):
             self._batt_widgets[key] = (value, state)
             if key == "case":
                 # The Pixel Buds Pro case has no Bluetooth radio of its own;
-                # its charge is only reported through a bud sitting in the
-                # case, so it reads "unknown" whenever both buds are out.
+                # its charge is only relayed through a bud seated in the case,
+                # and only while that bud is awake enough to report it (case
+                # lid open). It reads "—" otherwise.
                 title.setToolTip(
-                    "Case charge is only readable while at least one bud is "
-                    "in the case (the case has no Bluetooth radio itself)."
+                    "The case has no Bluetooth radio of its own; its charge is "
+                    "relayed through a bud seated in it. It reads \"—\" when no "
+                    "seated bud is awake to relay it (case empty, or lid closed)."
                 )
                 value.setToolTip(title.toolTip())
         inner.addLayout(row)
-        # Per-bud placement (in case / out of case). The case's charge is
-        # relayed through a seated bud, so this line explains why the case
-        # reads "—" whenever no bud is detected as being in the case.
+        # Per-bud placement (in case / out of case). Reported by the buds
+        # themselves and may lag or read "out of case" while the case lid is
+        # closed (a seated bud sleeps and stops relaying its state).
         self._place_label = QLabel("")
         self._place_label.setObjectName("muted")
         self._place_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._place_label.setToolTip(
+            "Placement is reported by the buds and can lag while the case lid "
+            "is closed, when a seated bud sleeps and stops relaying its state."
+        )
         inner.addWidget(self._place_label)
 
     def _build_anc_section(self, root: QVBoxLayout) -> None:
@@ -397,12 +403,9 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _load_battery():
-        battery = pbctrl.get_battery()
-        try:
-            placement = pbctrl.get_placement()
-        except Exception:
-            placement = None
-        return (battery, placement)
+        # One `show runtime` call returns both battery and placement from the
+        # same runtime-info snapshot (see pbctrl.get_runtime).
+        return pbctrl.get_runtime()
 
     def _apply_battery_state(self, result) -> None:
         report, placement = result
@@ -412,11 +415,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _load_all():
         data = {}
-        data["battery"] = pbctrl.get_battery()
-        try:
-            data["placement"] = pbctrl.get_placement()
-        except Exception:
-            data["placement"] = None
+        data["battery"], data["placement"] = pbctrl.get_runtime()
         data["anc"] = pbctrl.get_anc()
         data["eq"] = pbctrl.get_eq()
         data["balance"] = pbctrl.get_balance()
@@ -456,13 +455,15 @@ class MainWindow(QMainWindow):
 
     def _apply_placement(self, placement) -> None:
         if placement is None:
+            self._place_label.setText("")
             return
         parts = []
         for side, label in (("left", "Left"), ("right", "Right")):
             in_case = getattr(placement, f"{side}_in_case", None)
             if in_case is None:
-                continue
-            parts.append(f"{label}: {'in case' if in_case else 'out of case'}")
+                parts.append(f"{label}: unknown")
+            else:
+                parts.append(f"{label}: {'in case' if in_case else 'out of case'}")
         self._place_label.setText("   ·   ".join(parts))
 
     def _apply_anc(self, state: str) -> None:

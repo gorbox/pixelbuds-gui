@@ -42,6 +42,23 @@ placement = pbctrl.parse_placement(
 assert placement.left_in_case is True and placement.right_in_case is False
 assert pbctrl.parse_placement("").left_in_case is None
 
+# `show runtime` emits battery AND placement in one blob. parse_battery must
+# ignore the placement lines ("in case" / "out of case") and not overwrite the
+# battery fields it already parsed above them.
+runtime_battery = pbctrl.parse_battery(
+    "clock: 123 ms\n\n"
+    "battery:\n"
+    "  case:      85% (not charging)\n"
+    "  left bud:  90% (not charging)\n"
+    "  right bud: 88% (charging)\n\n"
+    "placement:\n"
+    "  left bud:  in case\n"
+    "  right bud: out of case\n"
+)
+assert runtime_battery.case.level == 85
+assert runtime_battery.left.level == 90
+assert runtime_battery.right.level == 88
+
 # pbpctrl's `HoldGestureAction` enum only defines `Anc` and `Assistant`; any
 # other gesture action makes clap reject the command (and the GUI report a
 # disconnect).  Guard against invalid actions being reintroduced.
@@ -82,6 +99,40 @@ assert _captured[1] == ("set", "balance", "--", "-42")
 assert _captured[2] == ("set", "balance", "--", "0")
 
 print("negative-value command construction: OK")
+
+
+# get_runtime must issue a single `show runtime` call and return both the
+# battery and the placement from that one snapshot.
+_runtime_calls = []
+
+
+def _fake_runtime(*args, device=None, timeout=20.0):
+    _runtime_calls.append(args)
+    return (
+        "clock: 123 ms\n\n"
+        "battery:\n"
+        "  case:      72% (charging)\n"
+        "  left bud:  95% (not charging)\n"
+        "  right bud: 40% (not charging)\n\n"
+        "placement:\n"
+        "  left bud:  in case\n"
+        "  right bud: out of case\n"
+    )
+
+
+orig_run = pbctrl._run
+pbctrl._run = _fake_runtime
+try:
+    b, p = pbctrl.get_runtime()
+finally:
+    pbctrl._run = orig_run
+
+assert _runtime_calls == [("show", "runtime")], _runtime_calls
+assert b.case.level == 72 and b.case.state == "charging"
+assert b.left.level == 95 and b.right.level == 40
+assert p.left_in_case is True and p.right_in_case is False
+
+print("get_runtime single-call consolidation: OK")
 
 
 
