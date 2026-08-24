@@ -11,14 +11,17 @@ Bluetooth RFCOMM. This project is the GUI on top of that.
 
 ## Features
 
-- **Battery** — left bud, right bud, and case (live, with charging state)
+- **Battery** — left bud, right bud, and case (live, with charging state),
+  plus per-bud placement (in case / out of case). The case has no Bluetooth
+  radio of its own, so its charge is only readable while at least one bud is
+  seated in the case.
 - **ANC mode** — Off / Transparency / Noise Cancelling / Adaptive, plus the
   ANC gesture loop (which modes the tap-hold cycles through)
 - **Equalizer** — 5-band (low bass / bass / mid / treble / upper treble),
   volume-dependent EQ, and quick presets
 - **Audio** — left/right balance, mono toggle
-- **Gestures** — enable/disable, and the hold action for each bud (ANC,
-  Assistant, check notifications, previous, next, play/pause)
+- **Gestures** — enable/disable, and the hold action for each bud (ANC or
+  Assistant; these are the only two actions `pbpctrl` accepts)
 - **Settings** — multipoint, on-head detection, speech detection
   (auto-transparency), volume-exposure notifications, diagnostics, auto-OTA
 - **Info** — firmware versions for the case and both buds

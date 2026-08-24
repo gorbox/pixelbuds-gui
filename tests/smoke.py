@@ -33,6 +33,20 @@ assert pbctrl.parse_balance("left: 100%, right: 100%\n") == 0
 
 assert pbctrl.parse_gesture_control("left: anc, right: assistant\n") == ("anc", "assistant")
 
+placement = pbctrl.parse_placement(
+    "clock: 123 ms\n\n"
+    "placement:\n"
+    "  left bud:  in case\n"
+    "  right bud: out of case\n"
+)
+assert placement.left_in_case is True and placement.right_in_case is False
+assert pbctrl.parse_placement("").left_in_case is None
+
+# pbpctrl's `HoldGestureAction` enum only defines `Anc` and `Assistant`; any
+# other gesture action makes clap reject the command (and the GUI report a
+# disconnect).  Guard against invalid actions being reintroduced.
+assert set(pbctrl.GESTURE_ACTIONS) == {"anc", "assistant"}, pbctrl.GESTURE_ACTIONS
+
 loop = pbctrl.parse_anc_loop("[active, off, adaptive]\n")
 assert loop == {"off": True, "active": True, "aware": False, "adaptive": True}
 

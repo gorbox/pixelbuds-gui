@@ -48,10 +48,6 @@ ANC_LABELS = {
 GESTURE_LABELS = {
     "anc": "Toggle ANC",
     "assistant": "Assistant",
-    "check-notifications": "Check notifications",
-    "previous": "Previous track",
-    "next": "Next track",
-    "play-pause": "Play / pause",
 }
 BOOL_LABELS = {
     "multipoint": "Multipoint",
@@ -258,6 +254,13 @@ class MainWindow(QMainWindow):
                 )
                 value.setToolTip(title.toolTip())
         inner.addLayout(row)
+        # Per-bud placement (in case / out of case). The case's charge is
+        # relayed through a seated bud, so this line explains why the case
+        # reads "—" whenever no bud is detected as being in the case.
+        self._place_label = QLabel("")
+        self._place_label.setObjectName("muted")
+        self._place_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        inner.addWidget(self._place_label)
 
     def _build_anc_section(self, root: QVBoxLayout) -> None:
         inner = self._add_card(root)
@@ -390,12 +393,30 @@ class MainWindow(QMainWindow):
     def _refresh_battery(self) -> None:
         if self._loading:
             return
-        self._submit(pbctrl.get_battery, self._apply_battery, self._on_battery_error)
+        self._submit(self._load_battery, self._apply_battery_state, self._on_battery_error)
+
+    @staticmethod
+    def _load_battery():
+        battery = pbctrl.get_battery()
+        try:
+            placement = pbctrl.get_placement()
+        except Exception:
+            placement = None
+        return (battery, placement)
+
+    def _apply_battery_state(self, result) -> None:
+        report, placement = result
+        self._apply_battery(report)
+        self._apply_placement(placement)
 
     @staticmethod
     def _load_all():
         data = {}
         data["battery"] = pbctrl.get_battery()
+        try:
+            data["placement"] = pbctrl.get_placement()
+        except Exception:
+            data["placement"] = None
         data["anc"] = pbctrl.get_anc()
         data["eq"] = pbctrl.get_eq()
         data["balance"] = pbctrl.get_balance()
@@ -409,6 +430,7 @@ class MainWindow(QMainWindow):
         self._loading = True
         try:
             self._apply_battery(data["battery"])
+            self._apply_placement(data.get("placement"))
             self._apply_anc(data["anc"])
             self._apply_eq(data["eq"])
             self._apply_balance(data["balance"])
@@ -431,6 +453,17 @@ class MainWindow(QMainWindow):
             else:
                 value_lbl.setText("—")
                 state_lbl.setText("")
+
+    def _apply_placement(self, placement) -> None:
+        if placement is None:
+            return
+        parts = []
+        for side, label in (("left", "Left"), ("right", "Right")):
+            in_case = getattr(placement, f"{side}_in_case", None)
+            if in_case is None:
+                continue
+            parts.append(f"{label}: {'in case' if in_case else 'out of case'}")
+        self._place_label.setText("   ·   ".join(parts))
 
     def _apply_anc(self, state: str) -> None:
         btn = self._anc_buttons.get(state)

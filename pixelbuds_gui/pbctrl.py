@@ -23,13 +23,12 @@ DEFAULT_DEVICE: Optional[str] = None
 ANC_STATES = ("off", "active", "aware", "adaptive")
 
 # Actions understood by `pbpctrl set gesture-control <left> <right>`.
+# pbpctrl's `HoldGestureAction` enum only defines `Anc` and `Assistant`, so any
+# other value (e.g. "next", "play-pause") makes clap reject the command and
+# pbpctrl exits non-zero -- which the GUI surfaces as a disconnect.
 GESTURE_ACTIONS = (
     "anc",
     "assistant",
-    "check-notifications",
-    "previous",
-    "next",
-    "play-pause",
 )
 
 # The four ANC modes that participate in the ANC gesture loop.
@@ -101,6 +100,19 @@ class BatteryReport:
     right: Optional[BatteryInfo] = None
 
 
+@dataclass
+class PlacementReport:
+    """Whether each bud is detected as seated in the case.
+
+    `None` means the placement is unknown (e.g. buds out of range). The case
+    has no Bluetooth radio of its own, so its charge is only relayed through a
+    bud that is seated in it -- this tells us whether that relay is possible.
+    """
+
+    left_in_case: Optional[bool] = None
+    right_in_case: Optional[bool] = None
+
+
 # --------------------------------------------------------------------------- #
 # Parsers
 # --------------------------------------------------------------------------- #
@@ -131,6 +143,24 @@ def parse_battery(text: str) -> BatteryReport:
 
 def parse_anc(text: str) -> str:
     return (text.strip().split() or ["unknown"])[0]
+
+
+_PLACE_LINE = re.compile(r"^(left bud|right bud):\s*(in case|out of case)$")
+
+
+def parse_placement(text: str) -> PlacementReport:
+    """Parse the ``placement:`` block of `pbpctrl show runtime` output."""
+    rep = PlacementReport()
+    for raw in text.splitlines():
+        m = _PLACE_LINE.match(raw.strip())
+        if not m:
+            continue
+        in_case = m.group(2) == "in case"
+        if m.group(1) == "left bud":
+            rep.left_in_case = in_case
+        else:
+            rep.right_in_case = in_case
+    return rep
 
 
 def parse_eq(text: str) -> list[float]:
@@ -181,6 +211,10 @@ def parse_keyed(text: str) -> dict[str, str]:
 
 def get_battery(device: Optional[str] = None) -> BatteryReport:
     return parse_battery(_run("show", "battery", device=device))
+
+
+def get_placement(device: Optional[str] = None) -> PlacementReport:
+    return parse_placement(_run("show", "runtime", device=device))
 
 
 def get_anc(device: Optional[str] = None) -> str:
