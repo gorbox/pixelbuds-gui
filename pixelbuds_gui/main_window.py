@@ -248,6 +248,15 @@ class MainWindow(QMainWindow):
             box.addWidget(state)
             row.addLayout(box)
             self._batt_widgets[key] = (value, state)
+            if key == "case":
+                # The Pixel Buds Pro case has no Bluetooth radio of its own;
+                # its charge is only reported through a bud sitting in the
+                # case, so it reads "unknown" whenever both buds are out.
+                title.setToolTip(
+                    "Case charge is only readable while at least one bud is "
+                    "in the case (the case has no Bluetooth radio itself)."
+                )
+                value.setToolTip(title.toolTip())
         inner.addLayout(row)
 
     def _build_anc_section(self, root: QVBoxLayout) -> None:

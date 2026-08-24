@@ -231,11 +231,18 @@ def cycle_anc(device: Optional[str] = None) -> None:
 def set_eq(bands, device: Optional[str] = None) -> None:
     if len(bands) != 5:
         raise ValueError("EQ requires exactly 5 bands")
-    _run("set", "eq", *[f"{float(b):.2f}" for b in bands], device=device)
+    # pbpctrl's clap parser treats a leading "-" as a flag, so a negative band
+    # (e.g. "-3.00") is rejected as "unexpected argument '-3'".  The "--"
+    # separator forces every following token to be parsed as a positional
+    # value.  It is harmless for non-negative bands, so we always pass it.
+    _run("set", "eq", "--", *[f"{float(b):.2f}" for b in bands], device=device)
 
 
 def set_balance(value: int, device: Optional[str] = None) -> None:
-    _run("set", "balance", str(int(value)), device=device)
+    # Same clap quirk: `pbpctrl set balance -50` fails with "unexpected
+    # argument '-5'", which is exactly why the balance slider only worked
+    # toward the right.  "--" makes negative (left) values parse correctly.
+    _run("set", "balance", "--", str(int(value)), device=device)
 
 
 def set_bool(name: str, value: bool, device: Optional[str] = None) -> None:

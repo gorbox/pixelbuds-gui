@@ -41,6 +41,36 @@ assert pbctrl.get_bool.__name__  # just ensure importable
 print("parsers: OK")
 
 
+# --- command-construction regression tests --------------------------------- #
+# pbpctrl's clap parser rejects a leading "-" (e.g. `set balance -50` →
+# "unexpected argument '-5'").  set_eq / set_balance must always insert "--"
+# so negative band / balance values reach pbpctrl as positional args.
+_captured = []
+
+
+def _fake_run(*args, device=None, timeout=20.0):
+    _captured.append(args)
+    return ""
+
+
+orig_run = pbctrl._run
+pbctrl._run = _fake_run
+try:
+    pbctrl.set_eq([-3.0, 2.5, 0.0, -1.25, 4.0])
+    pbctrl.set_balance(-42)
+    pbctrl.set_balance(0)
+finally:
+    pbctrl._run = orig_run
+
+assert len(_captured) == 3
+assert _captured[0] == ("set", "eq", "--", "-3.00", "2.50", "0.00", "-1.25", "4.00")
+assert _captured[1] == ("set", "balance", "--", "-42")
+assert _captured[2] == ("set", "balance", "--", "0")
+
+print("negative-value command construction: OK")
+
+
+
 # --- offscreen GUI construction ------------------------------------------- #
 import os
 
