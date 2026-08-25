@@ -6,6 +6,7 @@ applied to the widgets on the GUI thread via Qt signals.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QThreadPool, QRunnable, QObject, Signal, Slot, QTimer
 from PySide6.QtGui import QFont
@@ -88,8 +89,6 @@ QPushButton:checked, QPushButton:active {
     background-color: #3b82f6; border-color: #3b82f6; color: white;
 }
 QPushButton:pressed { background-color: #2563eb; }
-QCheckBox { spacing: 8px; }
-QCheckBox::indicator { width: 18px; height: 18px; border-radius: 4px; }
 QComboBox, QSlider::groove:horizontal {
     background-color: #262b34; border: 1px solid #343a46; border-radius: 6px;
 }
@@ -101,6 +100,23 @@ QSlider::sub-page:horizontal { background: #3b82f6; border-radius: 6px; }
 QSlider::groove:vertical { width: 6px; }
 QSlider::handle:vertical { height: 18px; margin: 0 -6px; background: #3b82f6; border-radius: 9px; }
 QScrollArea { border: none; }
+"""
+
+_CHECKMARK_PNG = Path(__file__).resolve().parent / "assets" / "checkmark.png"
+
+# Checkbox indicators are invisible against the dark card unless explicitly
+# styled: a bare `QWidget { background-color }` rule paints over the native
+# indicator. Give the box a visible border/background and draw a checkmark.
+DARK_QSS += f"""
+QCheckBox {{ spacing: 8px; }}
+QCheckBox::indicator {{
+    width: 18px; height: 18px; border-radius: 4px;
+    border: 1px solid #4b5563; background-color: #262b34;
+}}
+QCheckBox::indicator:checked {{
+    background-color: #3b82f6; border-color: #3b82f6;
+    image: url({_CHECKMARK_PNG.as_posix()});
+}}
 """
 
 
