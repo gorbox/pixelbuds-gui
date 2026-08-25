@@ -13,7 +13,7 @@ url="https://github.com/gorbox/pixelbuds-gui"
 license=('MIT')
 depends=('pbpctrl' 'pyside6')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/gorbox/$pkgname/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('bc85c600da322cfa822b585bf544995716d346490cc8ca4e9f4cfbe24f309e11')
+sha256sums=('ae24c7d43c909e6d943424dfb73ca5fe6e67a8c2fc8558856491568c31517ec4')
 
 package() {
     cd "$srcdir/$pkgname-$pkgver"
