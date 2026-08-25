@@ -130,6 +130,11 @@ class Worker(QRunnable):
 
     def __init__(self, fn, *args, **kwargs):
         super().__init__()
+        # We manage lifetime ourselves: autoDelete lets QThreadPool free the
+        # C++ QRunnable while its WorkerSignals QObject may still be holding
+        # a queued cross-thread signal, which corrupts the heap and silently
+        # drops success/error callbacks.  Keep it Python-owned instead.
+        self.setAutoDelete(False)
         self._fn = fn
         self._args = args
         self._kwargs = kwargs
@@ -160,6 +165,7 @@ class MainWindow(QMainWindow):
 
         self._pool = QThreadPool.globalInstance()
         self._loading = False  # suppress UI->set loops during refresh
+        self._workers = set()  # keep Worker refs alive until their signal delivers
 
         # Only expose the ANC modes the installed pbpctrl can actually set
         # (0.1.8 lacks "adaptive").  Detected once, synchronously -- this is a
@@ -595,13 +601,36 @@ class MainWindow(QMainWindow):
             return
         modes = {m: cb.isChecked() for m, cb in self._loop_checks.items()}
         if sum(modes.values()) < 2:
+            self._set_status("disconnected", "Loop needs at least 2 modes")
             return  # pbpctrl requires at least 2 modes
         self._submit(pbctrl.set_anc_loop, None, self._on_error, modes)
 
     def _set_bool(self, name: str, value: bool) -> None:
         if self._loading:
             return
-        self._submit(pbctrl.set_bool, None, self._on_error, name, value)
+        label = BOOL_LABELS.get(name, name)
+        self._set_status("busy", f"Setting {label}…")
+        self._submit(
+            pbctrl.set_bool,
+            lambda _r, n=name, v=value: self._on_bool_set(n, v),
+            lambda msg, n=name: self._on_bool_error(n, msg),
+            name,
+            value,
+        )
+
+    def _on_bool_set(self, name: str, value: bool) -> None:
+        label = BOOL_LABELS.get(name, name)
+        self._set_status("connected", f"Set {label}: {'on' if value else 'off'}")
+
+    def _on_bool_error(self, name: str, message: str) -> None:
+        # Revert the checkbox to its prior state so the UI never lies about a
+        # setting that didn't reach the buds.
+        cb = self._mono_check if name == "mono" else self._bool_checks.get(name)
+        if cb is not None:
+            cb.blockSignals(True)
+            cb.setChecked(not cb.isChecked())
+            cb.blockSignals(False)
+        self._on_error(message)
 
     # ------------------------------------------------------------- status --
 
@@ -628,10 +657,20 @@ class MainWindow(QMainWindow):
 
     def _submit(self, fn, on_done, on_error, *args) -> None:
         worker = Worker(fn, *args)
+        # Keep the Worker (and its WorkerSignals QObject) alive until its
+        # queued cross-thread signal has actually been delivered; otherwise
+        # Python GC can free it mid-flight and drop the callback (or crash).
+        self._workers.add(worker)
+
+        def _release(*_a) -> None:
+            self._workers.discard(worker)
+
         if on_done is not None:
             worker.signals.finished.connect(on_done)
         if on_error is not None:
             worker.signals.error.connect(on_error)
+        worker.signals.finished.connect(_release)
+        worker.signals.error.connect(_release)
         self._pool.start(worker)
 
 
