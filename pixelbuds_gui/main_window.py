@@ -30,8 +30,6 @@ from PySide6.QtWidgets import (
 from . import __version__
 from . import pbctrl
 from .pbctrl import (
-    ANC_LOOP_MODES,
-    ANC_STATES,
     BOOL_SETTINGS,
     GESTURE_ACTIONS,
     NoDeviceError,
@@ -146,6 +144,24 @@ class MainWindow(QMainWindow):
 
         self._pool = QThreadPool.globalInstance()
         self._loading = False  # suppress UI->set loops during refresh
+
+        # Only expose the ANC modes the installed pbpctrl can actually set
+        # (0.1.8 lacks "adaptive").  Detected once, synchronously -- this is a
+        # fast `--help` subprocess, not a Bluetooth round-trip.
+        self._anc_modes = pbctrl.detect_anc_modes()
+
+        # Debounce timers: slider drags and arrow-key presses fire `valueChanged`
+        # continuously, so coalesce the bursts into a single pbpctrl write
+        # instead of one slow RFCOMM handshake per tick.
+        self._eq_debounce = QTimer(self)
+        self._eq_debounce.setSingleShot(True)
+        self._eq_debounce.setInterval(250)
+        self._eq_debounce.timeout.connect(self._set_eq)
+
+        self._balance_debounce = QTimer(self)
+        self._balance_debounce.setSingleShot(True)
+        self._balance_debounce.setInterval(250)
+        self._balance_debounce.timeout.connect(self._set_balance)
 
         self._build_ui()
 
@@ -275,7 +291,7 @@ class MainWindow(QMainWindow):
         self._anc_group = QButtonGroup(self)
         self._anc_group.setExclusive(True)
         self._anc_buttons = {}
-        for state in ANC_STATES:
+        for state in self._anc_modes:
             btn = QPushButton(ANC_LABELS[state])
             btn.setCheckable(True)
             btn.clicked.connect(lambda _=False, s=state: self._set_anc(s))
@@ -287,7 +303,7 @@ class MainWindow(QMainWindow):
         inner.addWidget(self._section_title("ANC GESTURE LOOP (cycle modes)"))
         loop_row = QHBoxLayout()
         self._loop_checks = {}
-        for mode in ANC_LOOP_MODES:
+        for mode in self._anc_modes:
             cb = QCheckBox(ANC_LABELS[mode])
             cb.toggled.connect(lambda *_a, m=mode: self._set_anc_loop())
             self._loop_checks[mode] = cb
@@ -315,7 +331,9 @@ class MainWindow(QMainWindow):
             sl = QSlider(Qt.Orientation.Vertical)
             sl.setRange(-60, 60)  # -6.0 .. 6.0 in 0.1 steps
             sl.setFixedHeight(140)
-            sl.sliderReleased.connect(lambda _=False, idx=i: self._set_eq())
+            # valueChanged (not sliderReleased) so arrow-key edits apply too;
+            # the handler debounces and guards against refresh-driven changes.
+            sl.valueChanged.connect(self._eq_value_changed)
             val = QLabel("0.0")
             val.setObjectName("muted")
             val.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -338,7 +356,7 @@ class MainWindow(QMainWindow):
         bal_row.addWidget(QLabel("L"))
         self._balance_slider = QSlider(Qt.Orientation.Horizontal)
         self._balance_slider.setRange(-100, 100)
-        self._balance_slider.sliderReleased.connect(self._set_balance)
+        self._balance_slider.valueChanged.connect(self._balance_value_changed)
         self._balance_label = QLabel("0")
         self._balance_label.setObjectName("muted")
         self._balance_label.setMinimumWidth(30)
@@ -511,6 +529,17 @@ class MainWindow(QMainWindow):
     def _set_anc(self, state: str) -> None:
         self._submit(pbctrl.set_anc, None, self._on_error, state)
 
+    def _eq_value_changed(self) -> None:
+        # Fires on every slider change (drag, arrow-key, or programmatic).
+        # Update the readout live, but only schedule a write when the change
+        # came from the user -- refresh-driven `setValue` calls happen under
+        # `_loading` and must not echo back to the buds.
+        if self._loading:
+            return
+        for i in range(5):
+            self._eq_value_labels[i].setText(f"{self._eq_sliders[i].value() / 10.0:.1f}")
+        self._eq_debounce.start()
+
     def _set_eq(self) -> None:
         bands = [self._eq_sliders[i].value() / 10.0 for i in range(5)]
         for i, val in enumerate(bands):
@@ -530,6 +559,13 @@ class MainWindow(QMainWindow):
         value = self._balance_slider.value()
         self._balance_label.setText(str(value))
         self._submit(pbctrl.set_balance, None, self._on_error, value)
+
+    def _balance_value_changed(self) -> None:
+        # Same as _eq_value_changed: apply arrow-key edits, ignore refresh echo.
+        if self._loading:
+            return
+        self._balance_label.setText(str(self._balance_slider.value()))
+        self._balance_debounce.start()
 
     def _set_gestures(self) -> None:
         if self._loading:

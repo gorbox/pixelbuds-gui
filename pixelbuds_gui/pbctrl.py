@@ -83,6 +83,41 @@ def _run(*args: str, device: Optional[str] = None, timeout: float = 20.0) -> str
     return proc.stdout
 
 
+# The four ANC modes that participate in the ANC gesture loop.
+# NOTE: order matters for `set anc-gesture-loop <off> <active> <aware> [<adaptive>]`.
+# The released pbpctrl 0.1.8 (what the AUR ships) only knows `off`/`active`/
+# `aware`; the unreleased git HEAD adds `adaptive`.  `detect_anc_modes()` probes
+# the installed binary so the GUI exposes exactly the modes it can actually set,
+# instead of showing an "Adaptive" button that errors out on 0.1.8.
+_ANC_MODES_CACHE: Optional[list[str]] = None
+
+
+def detect_anc_modes() -> list[str]:
+    """Return the ANC modes (off/active/aware[/adaptive]) pbpctrl can set.
+
+    Parses `pbpctrl set anc --help`; the "adaptive" state is present only in
+    post-0.1.8 builds.  Falls back to the full superset if the binary can't be
+    probed.  The result is cached after the first successful detection.
+    """
+    global _ANC_MODES_CACHE
+    if _ANC_MODES_CACHE is not None:
+        return _ANC_MODES_CACHE
+    modes: list[str] = list(ANC_STATES)
+    try:
+        text = _run("set", "anc", "--help", timeout=10.0)
+    except PbctrlError:
+        pass
+    else:
+        m = re.search(r"\[possible values:\s*([^\]]*)\]", text)
+        if m:
+            supported = {v.strip() for v in m.group(1).split(",")}
+            detected: list[str] = [s for s in ANC_STATES if s in supported]
+            if detected:
+                modes = detected
+    _ANC_MODES_CACHE = modes
+    return modes
+
+
 # --------------------------------------------------------------------------- #
 # Models
 # --------------------------------------------------------------------------- #
@@ -312,9 +347,13 @@ def set_gesture_control(left: str, right: str, device: Optional[str] = None) -> 
 
 
 def set_anc_loop(modes: dict[str, bool], device: Optional[str] = None) -> None:
-    enabled = [m for m in ANC_LOOP_MODES if modes.get(m)]
+    # Iterate the dict's own key order (which the GUI builds from the detected
+    # mode list) so an older pbpctrl that accepts three modes never receives a
+    # fourth `adaptive` argument.  pbpctrl expects:
+    #   set anc-gesture-loop <off> <active> <aware> [<adaptive>]
+    order = [m for m in modes if m in ANC_LOOP_MODES]
+    enabled = [m for m in order if modes.get(m)]
     if len(enabled) < 2:
         raise ValueError("ANC gesture loop requires at least 2 enabled modes")
-    args = ["true" if modes.get(m) else "false" for m in ANC_LOOP_MODES]
-    # pbpctrl expects: set anc-gesture-loop <off> <active> <aware> <adaptive>
+    args = ["true" if modes.get(m) else "false" for m in order]
     _run("set", "anc-gesture-loop", *args, device=device)
