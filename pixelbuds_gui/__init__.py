@@ -4,4 +4,4 @@ Drives the `pbpctrl` CLI (https://github.com/qzed/pbpctrl), which implements
 the reverse-engineered Google "Maestro" + GFPS protocols over Bluetooth RFCOMM.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

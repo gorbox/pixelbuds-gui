@@ -1,6 +1,6 @@
 [project]
 name = "pixelbuds-gui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Desktop GUI to control Google Pixel Buds Pro on Linux"
 readme = "README.md"
 requires-python = ">=3.12"

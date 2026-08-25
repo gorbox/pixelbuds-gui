@@ -5,7 +5,7 @@
 #   makepkg -si
 
 pkgname=pixelbuds-gui
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Desktop GUI to control Google Pixel Buds Pro on Linux"
 arch=('any')
@@ -13,7 +13,7 @@ url="https://github.com/gorbox/pixelbuds-gui"
 license=('MIT')
 depends=('pbpctrl' 'pyside6')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/gorbox/$pkgname/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('78eda26897724efdeded363e3c476f71fafbd03d9f89c4e54821bd6336b67586')
+sha256sums=('bc85c600da322cfa822b585bf544995716d346490cc8ca4e9f4cfbe24f309e11')
 
 package() {
     cd "$srcdir/$pkgname-$pkgver"
