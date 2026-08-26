@@ -289,8 +289,10 @@ class MainWindow(QMainWindow):
                 # lid open). It reads "—" otherwise.
                 title.setToolTip(
                     "The case has no Bluetooth radio of its own; its charge is "
-                    "relayed through a bud seated in it. It reads \"—\" when no "
-                    "seated bud is awake to relay it (case empty, or lid closed)."
+                    "only relayed through a bud seated in it, and only while that "
+                    "bud is awake (case lid open). While charging it shows "
+                    "\"⚡ charging\" — the buds cannot distinguish USB from wireless "
+                    "(Qi) charging. With the lid closed it reads \"—\"."
                 )
                 value.setToolTip(title.toolTip())
         inner.addLayout(row)
@@ -482,16 +484,40 @@ class MainWindow(QMainWindow):
             self._loading = False
             self.refresh_btn.setEnabled(True)
 
+    @staticmethod
+    def _restyle(widget: QLabel, obj_name: str) -> None:
+        """Set a widget's objectName and re-polish so the QSS rule re-applies.
+
+        Re-polishing is only done when the name actually changes, so the
+        per-refresh battery tick does not pay the cost of a restyle when the
+        charge state has not changed.
+        """
+        if widget.objectName() == obj_name:
+            return
+        widget.setObjectName(obj_name)
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+
     def _apply_battery(self, report) -> None:
         for key in ("left", "right", "case"):
             value_lbl, state_lbl = self._batt_widgets[key]
             info = getattr(report, key)
             if info and info.level is not None:
                 value_lbl.setText(f"{info.level}%")
-                state_lbl.setText(info.state or "")
+                state = (info.state or "").strip()
+                if state == "charging":
+                    # pbpctrl reports a bare "charging" (BatteryState == 2).
+                    # The Maestro protocol cannot distinguish USB from wireless
+                    # (Qi) charging, so surface it as a generic charge state.
+                    state_lbl.setText("⚡ charging")
+                    self._restyle(state_lbl, "statusConnected")
+                else:
+                    state_lbl.setText(state)
+                    self._restyle(state_lbl, "muted")
             else:
                 value_lbl.setText("—")
                 state_lbl.setText("")
+                self._restyle(state_lbl, "muted")
 
     def _apply_placement(self, placement) -> None:
         if placement is None:
