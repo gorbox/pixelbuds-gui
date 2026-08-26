@@ -340,6 +340,24 @@ def set_bool(name: str, value: bool, device: Optional[str] = None) -> None:
     _run("set", name, "true" if value else "false", device=device)
 
 
+def set_bool_verified(name: str, value: bool, device: Optional[str] = None) -> None:
+    """Set a boolean setting and confirm the buds actually stored it.
+
+    Some settings (multipoint, on-head detection, diagnostics, speech
+    detection, volume-exposure notifications) are accepted by the firmware's
+    WriteSetting RPC but silently ignored on certain Pixel Buds Pro firmware --
+    notably the Pro 2, where pbpctrl's setting support is still incomplete.
+    Reading the value back and comparing lets us detect that and surface an
+    honest error instead of claiming the toggle worked.
+    """
+    set_bool(name, value, device=device)
+    actual = get_bool(name, device=device)
+    if actual != value:
+        raise PbctrlError(
+            f"firmware did not apply {name!r} (read back {actual!r})"
+        )
+
+
 def set_gesture_control(left: str, right: str, device: Optional[str] = None) -> None:
     if left not in GESTURE_ACTIONS or right not in GESTURE_ACTIONS:
         raise ValueError(f"invalid gesture action: {left}, {right}")

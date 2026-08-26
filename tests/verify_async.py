@@ -41,8 +41,14 @@ assert count == {"done": 100, "err": 100}, count
 assert len(win._workers) == 0, "workers must all be released after delivery"
 print("1 worker lifetime: 200 workers, no crash, all callbacks delivered")
 
+# Capture originals before any monkeypatching so test 4 can exercise the real
+# set_bool_verified even after tests 2/3 clobber the module attributes.
+_orig_set = pbctrl.set_bool
+_orig_get = pbctrl.get_bool
+_orig_verified = pbctrl.set_bool_verified
+
 # --- 2. success path: checkbox stays checked, status confirms -------------- #
-pbctrl.set_bool = lambda name, value, device=None: None
+pbctrl.set_bool_verified = lambda name, value, device=None: None
 cb = win._bool_checks["multipoint"]
 cb.setChecked(True)
 QTimer.singleShot(1000, app.quit)
@@ -51,15 +57,32 @@ assert cb.isChecked() is True
 assert "Set Multipoint: on" in win.status_label.text(), win.status_label.text()
 print("2 success feedback OK ->", repr(win.status_label.text()))
 
-# --- 3. failure path: checkbox reverts, status shows Not connected --------- #
+# --- 3. failure path: checkbox reverts, status names the failed setting ---- #
 def fail(name, value, device=None):
     raise pbctrl.PbctrlError("simulated write failure")
-pbctrl.set_bool = fail
+pbctrl.set_bool_verified = fail
 cb.setChecked(False)  # toggle True -> False; set fails, must revert to True
 QTimer.singleShot(1000, app.quit)
 app.exec()
 assert cb.isChecked() is True, "failed write must revert the checkbox"
-assert "Not connected" in win.status_label.text(), win.status_label.text()
+assert "Failed to set Multipoint" in win.status_label.text(), win.status_label.text()
 print("3 revert-on-failure OK ->", repr(win.status_label.text()))
+
+# --- 4. read-back verification catches firmware that ignores the write ----- #
+pbctrl.set_bool_verified = _orig_verified  # undo test 3's clobber
+try:
+    pbctrl.set_bool = lambda name, value, device=None: None
+    pbctrl.get_bool = lambda name, device=None: False  # write "didn't stick"
+    try:
+        pbctrl.set_bool_verified("multipoint", True)
+    except pbctrl.PbctrlError as exc:
+        assert "did not apply" in str(exc), str(exc)
+    else:
+        raise AssertionError("set_bool_verified must raise on read-back mismatch")
+finally:
+    pbctrl.set_bool_verified, pbctrl.set_bool, pbctrl.get_bool = (
+        _orig_verified, _orig_set, _orig_get,
+    )
+print("4 read-back verification OK")
 
 print("ASYNC FIX VERIFICATIONS PASSED")

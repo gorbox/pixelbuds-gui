@@ -611,7 +611,7 @@ class MainWindow(QMainWindow):
         label = BOOL_LABELS.get(name, name)
         self._set_status("busy", f"Setting {label}…")
         self._submit(
-            pbctrl.set_bool,
+            pbctrl.set_bool_verified,
             lambda _r, n=name, v=value: self._on_bool_set(n, v),
             lambda msg, n=name: self._on_bool_error(n, msg),
             name,
@@ -624,13 +624,22 @@ class MainWindow(QMainWindow):
 
     def _on_bool_error(self, name: str, message: str) -> None:
         # Revert the checkbox to its prior state so the UI never lies about a
-        # setting that didn't reach the buds.
+        # setting that didn't reach the buds, and surface a specific, honest
+        # status instead of the misleading "Not connected" (the device *is*
+        # connected -- the firmware just refused or silently ignored the write).
         cb = self._mono_check if name == "mono" else self._bool_checks.get(name)
         if cb is not None:
             cb.blockSignals(True)
             cb.setChecked(not cb.isChecked())
             cb.blockSignals(False)
-        self._on_error(message)
+        label = BOOL_LABELS.get(name, name)
+        self.refresh_btn.setEnabled(True)
+        reason = (message or "").strip().replace("\n", " ")[:120]
+        self._set_status(
+            "disconnected",
+            f"Failed to set {label}" + (f": {reason}" if reason else ""),
+        )
+        self.status_label.setToolTip(message)
 
     # ------------------------------------------------------------- status --
 
