@@ -57,6 +57,33 @@ Depends on the `pbpctrl` and `pyside6` Arch packages. To publish on the AUR,
 replace the placeholder `url`/`source` in `PKGBUILD` with your repo and run
 `makepkg -g` to generate the real checksum.
 
+## Background monitoring & notifications (optional)
+
+The repo vendors [`yom/pbutils`](https://github.com/yom/pbutils) under
+`pbutils/` — a background daemon (`pbwatch`) that keeps a persistent RFCOMM
+connection to your buds and fires desktop notifications (battery low, ANC
+changes, connect/disconnect) even when the GUI is closed.
+
+```bash
+pbutils/install.sh            # auto-detects the buds' MAC
+pbutils/install.sh AB:CD:...  # or pass it explicitly
+```
+
+It installs `dunst` + the Python/icon deps, the `pbwatch`/`pbwidget` scripts to
+`~/.local/bin`, and enables the `pbwatch` systemd *user* service.
+
+When `pbwatch` is running, the GUI reads its state files for battery/placement/
+ANC **instead of opening a second RFCOMM connection** (see
+`pixelbuds_gui/pbwatch_client.py`), avoiding the maestro-connection handoff
+contention between the two processes. Settings *writes* still go through
+`pbpctrl` and open their own connection — while the daemon is connected those
+writes occasionally fail and are handled by the GUI's existing error paths.
+Reads are unaffected.
+
+> ⚠ `yom/pbutils` has **no license file** (all-rights-reserved by default). It's
+> kept as a clearly-attributed subdirectory; ask upstream before redistributing
+> broadly. See `pbutils/README.md`.
+
 ## Development
 
 ```bash
@@ -68,6 +95,8 @@ uv run python tests/smoke.py # run the parser/GUI smoke tests
 ## How it works
 
 - `pixelbuds_gui/pbctrl.py` — subprocess wrapper + parsers around `pbpctrl`
+- `pixelbuds_gui/pbwatch_client.py` — reads the optional `pbwatch` daemon's
+  state files as a contention-free source for battery/placement/ANC
 - `pixelbuds_gui/main_window.py` — the Qt UI (all blocking calls run off the
   GUI thread via a worker pool)
 

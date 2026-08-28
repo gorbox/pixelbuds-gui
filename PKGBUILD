@@ -12,6 +12,13 @@ arch=('any')
 url="https://github.com/gorbox/pixelbuds-gui"
 license=('MIT')
 depends=('pbpctrl' 'pyside6')
+optdepends=('dunst: notification daemon for the pbwatch background monitor'
+            'python-cairo: render the pbwatch battery/ANC widget'
+            'python-gobject: render the pbwatch battery/ANC widget'
+            'python-pillow: generate the pbwatch sprite sheet'
+            'python-dbus: lookup device names in pbwatch'
+            'librsvg: SVG icons for the pbwatch widget'
+            'adwaita-icon-theme: battery/ear status icons for the pbwatch widget')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/gorbox/$pkgname/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('ae24c7d43c909e6d943424dfb73ca5fe6e67a8c2fc8558856491568c31517ec4')
 
@@ -19,6 +26,7 @@ package() {
     cd "$srcdir/$pkgname-$pkgver"
     install -dm755 "$pkgdir/usr/lib/$pkgname"
     cp -r pixelbuds_gui "$pkgdir/usr/lib/$pkgname/pixelbuds_gui"
+    cp -r pbutils "$pkgdir/usr/lib/$pkgname/pbutils"
     install -Dm755 packaging/pixelbuds-gui-launcher.sh "$pkgdir/usr/bin/$pkgname"
     install -Dm644 packaging/pixelbuds-gui.desktop "$pkgdir/usr/share/applications/$pkgname.desktop"
 }
