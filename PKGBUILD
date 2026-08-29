@@ -21,4 +21,8 @@ package() {
     cp -r pixelbuds_gui "$pkgdir/usr/lib/$pkgname/pixelbuds_gui"
     install -Dm755 packaging/pixelbuds-gui-launcher.sh "$pkgdir/usr/bin/$pkgname"
     install -Dm644 packaging/pixelbuds-gui.desktop "$pkgdir/usr/share/applications/$pkgname.desktop"
+    for size in 16 24 32 48 64 128 256; do
+        install -Dm644 "packaging/icons/hicolor/${size}x${size}/apps/pixelbuds-gui.png" \
+            "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/pixelbuds-gui.png"
+    done
 }

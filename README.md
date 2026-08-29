@@ -49,7 +49,8 @@ cd pixelbuds-gui
 
 Then launch with `pixelbuds-gui`, or search "Pixel Buds Pro" in your app
 launcher. The installer sets up `uv`, pulls `pbpctrl` from the AUR, creates the
-Python environment, and drops a launcher + `.desktop` entry into `~/.local`.
+Python environment, and drops a launcher, `.desktop` entry, and app icon into
+`~/.local` (icon installed into the hicolor theme as `pixelbuds-gui`).
 
 ### Option B — native Arch package (AUR)
 

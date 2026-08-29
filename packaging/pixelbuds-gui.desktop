@@ -3,5 +3,6 @@ Type=Application
 Name=Pixel Buds Pro
 Comment=Control your Google Pixel Buds Pro
 Exec=pixelbuds-gui
+Icon=pixelbuds-gui
 Terminal=false
 Categories=Audio;Settings;

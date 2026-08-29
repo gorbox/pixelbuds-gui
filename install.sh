@@ -38,8 +38,19 @@ fi
 say "creating Python environment…"
 uv sync
 
-# --- 4. launcher + desktop entry -------------------------------------------
-mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
+# --- 4. launcher + desktop entry + icon -------------------------------------
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/icons"
+
+# Install the app icon into the hicolor theme so the launcher shows it
+# (resolved by name via the `Icon=` key below).
+for size in 16 24 32 48 64 128 256; do
+    src="$INSTALL_DIR/packaging/icons/hicolor/${size}x${size}/apps/pixelbuds-gui.png"
+    dst="$HOME/.local/share/icons/hicolor/${size}x${size}/apps"
+    mkdir -p "$dst"
+    cp "$src" "$dst/pixelbuds-gui.png"
+done
+command -v gtk-update-icon-cache >/dev/null 2>&1 \
+    && gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 
 cat > "$HOME/.local/bin/pixelbuds-gui" <<EOF
 #!/usr/bin/env bash
@@ -53,9 +64,12 @@ Type=Application
 Name=Pixel Buds Pro
 Comment=Control your Google Pixel Buds Pro
 Exec=$HOME/.local/bin/pixelbuds-gui
+Icon=pixelbuds-gui
 Terminal=false
 Categories=Audio;Settings;
 EOF
+command -v update-desktop-database >/dev/null 2>&1 \
+    && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
 say "done — launch with:  pixelbuds-gui   (or search 'Pixel Buds Pro' in your app launcher)"
 warn "Make sure your buds are paired to this PC first:  bluetoothctl pair <MAC>"

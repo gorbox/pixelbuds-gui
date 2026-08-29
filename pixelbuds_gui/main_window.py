@@ -18,7 +18,7 @@ from PySide6.QtCore import (
     Slot,
     QTimer,
 )
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -114,6 +114,7 @@ QScrollArea { border: none; }
 """
 
 _CHECKMARK_PNG = Path(__file__).resolve().parent / "assets" / "checkmark.png"
+_APP_ICON_PNG = Path(__file__).resolve().parent / "assets" / "pixelbuds-gui.png"
 
 # Checkbox indicators are invisible against the dark card unless explicitly
 # styled: a bare `QWidget { background-color }` rule paints over the native
@@ -791,6 +792,7 @@ class MainWindow(QMainWindow):
 def run() -> int:
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_QSS)
+    app.setWindowIcon(QIcon(str(_APP_ICON_PNG)))
     win = MainWindow()
     win.show()
     return app.exec()
