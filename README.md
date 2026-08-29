@@ -16,7 +16,8 @@ Bluetooth RFCOMM. This project is the GUI on top of that.
   radio of its own, so its charge is only readable while at least one bud is
   seated in the case.
 - **ANC mode** — Off / Transparency / Noise Cancelling / Adaptive, plus the
-  ANC gesture loop (which modes the tap-hold cycles through)
+  ANC gesture loop (which modes the tap-hold cycles through), and a one-shot
+  **Cycle** button (`set anc cycle-next`)
 - **Equalizer** — 5-band (low bass / bass / mid / treble / upper treble),
   volume-dependent EQ, and quick presets
 - **Audio** — left/right balance, mono toggle
@@ -24,7 +25,10 @@ Bluetooth RFCOMM. This project is the GUI on top of that.
   Assistant; these are the only two actions `pbpctrl` accepts)
 - **Settings** — multipoint, on-head detection, speech detection
   (auto-transparency), volume-exposure notifications, diagnostics, auto-OTA
-- **Info** — firmware versions for the case and both buds
+- **Low-battery alerts** — desktop notification when a bud or the case drops
+  below a configurable threshold (default 20%), with re-arm hysteresis so a
+  sitting-low bud doesn't re-notify every poll
+- **Info** — firmware versions and serial numbers for the case and both buds
 
 ## Requirements
 
@@ -68,6 +72,8 @@ uv run python tests/smoke.py # run the parser/GUI smoke tests
 ## How it works
 
 - `pixelbuds_gui/pbctrl.py` — subprocess wrapper + parsers around `pbpctrl`
+- `pixelbuds_gui/notifications.py` — low-battery detection (Qt-free, with
+  threshold/hysteresis logic) + `notify-send` delivery
 - `pixelbuds_gui/main_window.py` — the Qt UI (all blocking calls run off the
   GUI thread via a worker pool)
 

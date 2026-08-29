@@ -135,6 +135,100 @@ assert p.left_in_case is True and p.right_in_case is False
 print("get_runtime single-call consolidation: OK")
 
 
+# --- `show hardware` serial parsing --------------------------------------- #
+serials = pbctrl.parse_keyed(
+    "\n".join(
+        [
+            "serial numbers:",
+            "  case:      AB12CD",
+            "  left bud:  EF34GH",
+            "  right bud: IJ56KL",
+        ]
+    )
+)
+assert serials["case"] == "AB12CD"
+assert serials["left bud"] == "EF34GH"
+assert serials["right bud"] == "IJ56KL"
+
+print("serials parsing: OK")
+
+
+# --- notifications: detection + delivery ---------------------------------- #
+from types import SimpleNamespace  # noqa: E402
+
+from pixelbuds_gui import notifications as notif  # noqa: E402
+from pixelbuds_gui.notifications import (  # noqa: E402
+    LowBatteryMonitor,
+    notify_low_battery,
+    send_notification,
+)
+
+
+def _report(left, right, case):
+    def comp(level):
+        return None if level is None else SimpleNamespace(level=level)
+
+    return SimpleNamespace(left=comp(left), right=comp(right), case=comp(case))
+
+
+mon = LowBatteryMonitor(threshold=20, hysteresis=5)
+
+crossed = mon.check(_report(15, 60, None))
+assert crossed == [("left", 15)], crossed
+assert mon.check(_report(15, 60, None)) == []  # no repeat while still below
+assert mon.check(_report(15, 18, None)) == [("right", 18)]
+assert mon.check(_report(30, 18, None)) == []  # left re-arms above 25
+assert mon.check(_report(14, 18, None)) == [("left", 14)]  # and re-notifies
+assert mon.check(_report(14, 18, 5)) == [("case", 5)]
+
+# Unknown components are skipped and leave state untouched.
+mon2 = LowBatteryMonitor()
+assert mon2.check(_report(None, None, None)) == []
+
+print("low-battery monitor: OK")
+
+
+_sent = []
+_orig_send = notif.send_notification
+
+
+def _fake_send(title, body, urgency="normal"):
+    _sent.append((title, body, urgency))
+    return True
+
+
+notif.send_notification = _fake_send
+try:
+    notify_low_battery([("left", 12), ("case", 8)])
+finally:
+    notif.send_notification = _orig_send
+
+assert len(_sent) == 1
+assert _sent[0][0] == "Pixel Buds low battery"
+assert "Left bud at 12%" in _sent[0][1]
+assert "Case at 8%" in _sent[0][1]
+assert _sent[0][2] == "critical"
+
+# No crossings -> no notification.
+notif.send_notification = _fake_send
+_sent.clear()
+try:
+    notify_low_battery([])
+finally:
+    notif.send_notification = _orig_send
+assert _sent == []
+
+# Missing notify-send binary -> send_notification no-ops to False (never raises).
+_orig_which = notif.shutil.which
+notif.shutil.which = lambda _p: None
+try:
+    assert send_notification("t", "b") is False
+finally:
+    notif.shutil.which = _orig_which
+
+print("notifications: OK")
+
+
 
 # --- offscreen GUI construction ------------------------------------------- #
 import os

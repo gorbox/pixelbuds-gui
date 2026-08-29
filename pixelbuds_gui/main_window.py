@@ -8,7 +8,16 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThreadPool, QRunnable, QObject, Signal, Slot, QTimer
+from PySide6.QtCore import (
+    Qt,
+    QSettings,
+    QThreadPool,
+    QRunnable,
+    QObject,
+    Signal,
+    Slot,
+    QTimer,
+)
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -24,12 +33,14 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from . import __version__
 from . import pbctrl
+from .notifications import LowBatteryMonitor, notify_low_battery
 from .pbctrl import (
     BOOL_SETTINGS,
     GESTURE_ACTIONS,
@@ -166,6 +177,14 @@ class MainWindow(QMainWindow):
         self._pool = QThreadPool.globalInstance()
         self._loading = False  # suppress UI->set loops during refresh
         self._workers = set()  # keep Worker refs alive until their signal delivers
+
+        # Persisted GUI-local preferences (not bud settings). QSettings reads
+        # the real user config; only user actions write it back, so the
+        # offscreen smoke test never mutates state.
+        self._settings = QSettings("pixelbuds-gui", "pixelbuds-gui")
+        self._notify_enabled = bool(self._settings.value("notify_enabled", True, type=bool))
+        threshold = self._settings.value("notify_threshold", 20, type=int)  # type: ignore[arg-type]  # PySide6 stub limitation
+        self._low_battery = LowBatteryMonitor(threshold=threshold)
 
         # Only expose the ANC modes the installed pbpctrl can actually set
         # (0.1.8 lacks "adaptive").  Detected once, synchronously -- this is a
@@ -322,6 +341,11 @@ class MainWindow(QMainWindow):
             self._anc_group.addButton(btn)
             self._anc_buttons[state] = btn
             anc_row.addWidget(btn)
+        # Quick one-shot cycle through the modes (`set anc cycle-next`).
+        cycle_btn = QPushButton("Cycle")
+        cycle_btn.setProperty("class", "small")
+        cycle_btn.clicked.connect(self._cycle_anc)
+        anc_row.addWidget(cycle_btn)
         inner.addLayout(anc_row)
 
         inner.addWidget(self._section_title("ANC GESTURE LOOP (cycle modes)"))
@@ -424,12 +448,31 @@ class MainWindow(QMainWindow):
             inner.addWidget(cb)
             self._bool_checks[name] = cb
 
+        # Low-battery desktop notifications (GUI-local preference, persisted).
+        notify_row = QHBoxLayout()
+        self._notify_check = QCheckBox("Low-battery alerts")
+        self._notify_check.setChecked(self._notify_enabled)
+        self._notify_check.toggled.connect(self._set_notify_enabled)
+        notify_row.addWidget(self._notify_check)
+        notify_row.addStretch(1)
+        notify_row.addWidget(QLabel("Threshold"))
+        self._notify_threshold = QSpinBox()
+        self._notify_threshold.setRange(10, 50)
+        self._notify_threshold.setSuffix("%")
+        self._notify_threshold.setValue(self._low_battery.threshold)
+        self._notify_threshold.valueChanged.connect(self._set_notify_threshold)
+        notify_row.addWidget(self._notify_threshold)
+        inner.addLayout(notify_row)
+
     def _build_info_section(self, root: QVBoxLayout) -> None:
         inner = self._add_card(root)
         inner.addWidget(self._section_title("ABOUT"))
         self._firmware_label = QLabel("Firmware: —")
         self._firmware_label.setObjectName("muted")
         inner.addWidget(self._firmware_label)
+        self._serial_label = QLabel("Serial: —")
+        self._serial_label.setObjectName("muted")
+        inner.addWidget(self._serial_label)
 
     # ------------------------------------------------------------ refresh --
 
@@ -453,6 +496,7 @@ class MainWindow(QMainWindow):
         report, placement = result
         self._apply_battery(report)
         self._apply_placement(placement)
+        self._maybe_notify(report)
 
     @staticmethod
     def _load_all():
@@ -465,6 +509,7 @@ class MainWindow(QMainWindow):
         data["loop"] = pbctrl.get_anc_loop()
         data["bools"] = {n: pbctrl.get_bool(n) for n in BOOL_SETTINGS}
         data["firmware"] = pbctrl.get_firmware()
+        data["serials"] = pbctrl.get_serials()
         return data
 
     def _apply_all(self, data: dict) -> None:
@@ -472,6 +517,7 @@ class MainWindow(QMainWindow):
         try:
             self._apply_battery(data["battery"])
             self._apply_placement(data.get("placement"))
+            self._maybe_notify(data["battery"])
             self._apply_anc(data["anc"])
             self._apply_eq(data["eq"])
             self._apply_balance(data["balance"])
@@ -479,6 +525,7 @@ class MainWindow(QMainWindow):
             self._apply_loop(data["loop"])
             self._apply_bools(data["bools"])
             self._apply_firmware(data["firmware"])
+            self._apply_serials(data.get("serials"))
             self._set_status("connected", "Connected")
         finally:
             self._loading = False
@@ -532,6 +579,11 @@ class MainWindow(QMainWindow):
                 parts.append(f"{label}: {'in case' if in_case else 'out of case'}")
         self._place_label.setText("   ·   ".join(parts))
 
+    def _maybe_notify(self, report) -> None:
+        if not self._notify_enabled:
+            return
+        notify_low_battery(self._low_battery.check(report))
+
     def _apply_anc(self, state: str) -> None:
         btn = self._anc_buttons.get(state)
         if btn:
@@ -572,10 +624,37 @@ class MainWindow(QMainWindow):
                 parts.append(f"{key}: {firmware[key]}")
         self._firmware_label.setText("Firmware — " + "   ".join(parts) if parts else "Firmware: —")
 
+    def _apply_serials(self, serials: dict[str, str] | None) -> None:
+        if not serials:
+            self._serial_label.setText("Serial: —")
+            return
+        parts = []
+        for key in ("case", "left bud", "right bud"):
+            if key in serials and serials[key] and serials[key] != "unknown":
+                parts.append(f"{key}: {serials[key]}")
+        self._serial_label.setText("Serial — " + "   ".join(parts) if parts else "Serial: —")
+
     # ------------------------------------------------------------ actions --
 
     def _set_anc(self, state: str) -> None:
         self._submit(pbctrl.set_anc, None, self._on_error, state)
+
+    def _cycle_anc(self) -> None:
+        self._set_status("busy", "Cycling ANC…")
+        self._submit(pbctrl.cycle_anc, lambda _r: self._refresh_anc(), self._on_error)
+
+    def _refresh_anc(self) -> None:
+        self._submit(pbctrl.get_anc, self._apply_anc, self._on_error)
+
+    def _set_notify_enabled(self, enabled: bool) -> None:
+        if self._loading:
+            return
+        self._notify_enabled = enabled
+        self._settings.setValue("notify_enabled", enabled)
+
+    def _set_notify_threshold(self, value: int) -> None:
+        self._low_battery.threshold = value
+        self._settings.setValue("notify_threshold", value)
 
     def _eq_value_changed(self) -> None:
         # Fires on every slider change (drag, arrow-key, or programmatic).
