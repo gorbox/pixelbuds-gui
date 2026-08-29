@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from . import pbctrl
-from . import pbwatch_client
 from .pbctrl import (
     BOOL_SETTINGS,
     GESTURE_ACTIONS,
@@ -446,13 +445,6 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _load_battery():
-        # Prefer the pbwatch daemon's state file when it's fresh — it holds a
-        # persistent RFCOMM connection, so reading its snapshot avoids opening a
-        # second connection (and the maestro handoff contention) through pbpctrl.
-        # Fall back to a live `show runtime` call when the daemon isn't active.
-        state = pbwatch_client.read_state()
-        if state is not None:
-            return state.battery, state.placement
         # One `show runtime` call returns both battery and placement from the
         # same runtime-info snapshot (see pbctrl.get_runtime).
         return pbctrl.get_runtime()
@@ -465,16 +457,8 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _load_all():
         data = {}
-        # battery/placement/ANC come from pbwatch when the daemon is active
-        # (no second RFCOMM connection); everything else still needs pbpctrl.
-        state = pbwatch_client.read_state()
-        if state is not None:
-            data["battery"] = state.battery
-            data["placement"] = state.placement
-            data["anc"] = state.anc if state.anc is not None else pbctrl.get_anc()
-        else:
-            data["battery"], data["placement"] = pbctrl.get_runtime()
-            data["anc"] = pbctrl.get_anc()
+        data["battery"], data["placement"] = pbctrl.get_runtime()
+        data["anc"] = pbctrl.get_anc()
         data["eq"] = pbctrl.get_eq()
         data["balance"] = pbctrl.get_balance()
         data["gesture"] = pbctrl.get_gesture_control()
