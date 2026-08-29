@@ -28,6 +28,12 @@ Bluetooth RFCOMM. This project is the GUI on top of that.
 - **Low-battery alerts** — desktop notification when a bud or the case drops
   below a configurable threshold (default 20%), with re-arm hysteresis so a
   sitting-low bud doesn't re-notify every poll
+- **System tray** — runs resident in the tray; closing the window minimizes it
+  instead of quitting (toggleable in Settings) so alerts keep firing while
+  hidden. Tray menu: Show/Hide, Refresh, Quit; tooltip shows live battery.
+- **Honest errors** — a refused/failed change names the setting and reason
+  (e.g. "Failed to set equalizer: status: Unimplemented (12)"), while a
+  genuinely missing device shows "Not connected" — no more conflating the two.
 - **Info** — firmware versions and serial numbers for the case and both buds
 
 ## Requirements

@@ -256,3 +256,37 @@ assert txt == "Not connected", f"unexpected status: {txt!r}"
 assert win.refresh_btn.isEnabled()
 
 print("GUI construction + async error path: OK  (status =", txt + ")")
+
+
+# --- tray + honest-error classification ------------------------------------ #
+# On a headless/offscreen host there is no system tray: the window must still
+# construct cleanly and the "close to tray" control must be disabled.
+assert win._tray is None, "tray should not exist on the offscreen platform"
+assert win._tray_check.isEnabled() is False, "close-to-tray needs a tray"
+
+# A missing device is "Not connected"; a refused write names the setting.
+win._on_write_error("equalizer", pbctrl.NoDeviceError("no compatible device"))
+assert win.status_label.text() == "Not connected", win.status_label.text()
+
+win._on_write_error("equalizer", pbctrl.PbctrlError("status: Unimplemented (12)"))
+assert win.status_label.text().startswith("Failed to set equalizer"), win.status_label.text()
+assert "Unimplemented" in win.status_label.text()
+
+# Bool set errors revert the checkbox and classify the same way.  Block the
+# checkbox's toggled signal first so we don't fire a real background write.
+mp = win._bool_checks["multipoint"]
+mp.blockSignals(True)
+mp.setChecked(True)
+mp.blockSignals(False)
+win._on_bool_error("multipoint", pbctrl.PbctrlError("status: PermissionDenied (7)"))
+assert mp.isChecked() is False, "checkbox should revert"
+assert "Failed to set Multipoint" in win.status_label.text()
+
+# BlueZ's "not present" (host has no adapter at all) is a device error, not a
+# refused write -- it must map to "Not connected", not "Failed to set ...".
+assert pbctrl._is_no_device_message(
+    "Error: the target object was either not present or removed"
+)
+assert not pbctrl._is_no_device_message("status: Unimplemented (12)")
+
+print("tray + honest-error classification: OK")

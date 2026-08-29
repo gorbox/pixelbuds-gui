@@ -19,6 +19,24 @@ PBPCTRL = shutil.which("pbpctrl") or "pbpctrl"
 # If None, pbpctrl auto-detects the paired buds.
 DEFAULT_DEVICE: Optional[str] = None
 
+# Substrings in pbpctrl/BlueZ error output that mean "no buds reachable" rather
+# than "the firmware refused a write".  Distinguishing these lets the GUI show
+# an honest "Not connected" for a missing device instead of implying a write
+# failed.  "not present" covers BlueZ's "the target object was either not
+# present or removed" — the error you get when the host has no Bluetooth
+# adapter at all (or the buds have gone out of range).
+_NO_DEVICE_HINTS = (
+    "no compatible device",
+    "no default adapter",
+    "not available",
+    "not present",
+)
+
+
+def _is_no_device_message(msg: str) -> bool:
+    low = msg.lower()
+    return any(hint in low for hint in _NO_DEVICE_HINTS)
+
 # ANC states understood by `pbpctrl set anc <state>`.
 ANC_STATES = ("off", "active", "aware", "adaptive")
 
@@ -75,8 +93,7 @@ def _run(*args: str, device: Optional[str] = None, timeout: float = 20.0) -> str
 
     if proc.returncode != 0:
         msg = (proc.stderr or proc.stdout or "").strip()
-        low = msg.lower()
-        if "no compatible device" in low or "no default adapter" in low or "not available" in low:
+        if _is_no_device_message(msg):
             raise NoDeviceError(msg or "no Pixel Buds found")
         raise PbctrlError(msg or f"pbpctrl exited with code {proc.returncode}")
 

@@ -29,11 +29,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -134,7 +136,9 @@ QCheckBox::indicator:checked {{
 
 class WorkerSignals(QObject):
     finished = Signal(object)
-    error = Signal(str)
+    # Carry the exception object (not a flattened string) so handlers can
+    # distinguish NoDeviceError ("not connected") from a refused/failed write.
+    error = Signal(object)
 
 
 class Worker(QRunnable):
@@ -157,7 +161,7 @@ class Worker(QRunnable):
         try:
             result = self._fn(*self._args, **self._kwargs)
         except Exception as exc:  # noqa: BLE001 - surfaced to the UI
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(exc)
         else:
             self.signals.finished.emit(result)
 
@@ -191,6 +195,13 @@ class MainWindow(QMainWindow):
         # (0.1.8 lacks "adaptive").  Detected once, synchronously -- this is a
         # fast `--help` subprocess, not a Bluetooth round-trip.
         self._anc_modes = pbctrl.detect_anc_modes()
+
+        # System tray: keep the app resident so low-battery alerts survive
+        # closing the window.  `_setup_tray` is a no-op when the platform has
+        # no tray (e.g. the offscreen smoke test), leaving `self._tray = None`.
+        self._close_to_tray = bool(self._settings.value("close_to_tray", True, type=bool))
+        self._tray_hint_shown = False
+        self._setup_tray()
 
         # Debounce timers: slider drags and arrow-key presses fire `valueChanged`
         # continuously, so coalesce the bursts into a single pbpctrl write
@@ -465,6 +476,14 @@ class MainWindow(QMainWindow):
         notify_row.addWidget(self._notify_threshold)
         inner.addLayout(notify_row)
 
+        # Minimize-to-tray (GUI-local preference). Disabled when the platform
+        # has no system tray, since hiding with no way back would trap the user.
+        self._tray_check = QCheckBox("Close to tray (keep running)")
+        self._tray_check.setChecked(self._close_to_tray)
+        self._tray_check.setEnabled(self._tray is not None)
+        self._tray_check.toggled.connect(self._set_close_to_tray)
+        inner.addWidget(self._tray_check)
+
     def _build_info_section(self, root: QVBoxLayout) -> None:
         inner = self._add_card(root)
         inner.addWidget(self._section_title("ABOUT"))
@@ -546,6 +565,11 @@ class MainWindow(QMainWindow):
         widget.style().unpolish(widget)
         widget.style().polish(widget)
 
+    @staticmethod
+    def _short(msg: str, limit: int = 120) -> str:
+        """Flatten an exception's text into a one-line status fragment."""
+        return (msg or "").strip().replace("\n", " ")[:limit]
+
     def _apply_battery(self, report) -> None:
         for key in ("left", "right", "case"):
             value_lbl, state_lbl = self._batt_widgets[key]
@@ -566,6 +590,7 @@ class MainWindow(QMainWindow):
                 value_lbl.setText("—")
                 state_lbl.setText("")
                 self._restyle(state_lbl, "muted")
+        self._update_tray_tooltip(report)
 
     def _apply_placement(self, placement) -> None:
         if placement is None:
@@ -638,11 +663,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ actions --
 
     def _set_anc(self, state: str) -> None:
-        self._submit(pbctrl.set_anc, None, self._on_error, state)
+        self._submit(pbctrl.set_anc, None, lambda exc: self._on_write_error("ANC mode", exc), state)
 
     def _cycle_anc(self) -> None:
         self._set_status("busy", "Cycling ANC…")
-        self._submit(pbctrl.cycle_anc, lambda _r: self._refresh_anc(), self._on_error)
+        self._submit(pbctrl.cycle_anc, lambda _r: self._refresh_anc(), lambda exc: self._on_write_error("ANC mode", exc))
 
     def _refresh_anc(self) -> None:
         self._submit(pbctrl.get_anc, self._apply_anc, self._on_error)
@@ -652,6 +677,12 @@ class MainWindow(QMainWindow):
             return
         self._notify_enabled = enabled
         self._settings.setValue("notify_enabled", enabled)
+
+    def _set_close_to_tray(self, enabled: bool) -> None:
+        if self._loading:
+            return
+        self._close_to_tray = enabled
+        self._settings.setValue("close_to_tray", enabled)
 
     def _set_notify_threshold(self, value: int) -> None:
         self._low_battery.threshold = value
@@ -672,7 +703,7 @@ class MainWindow(QMainWindow):
         bands = [self._eq_sliders[i].value() / 10.0 for i in range(5)]
         for i, val in enumerate(bands):
             self._eq_value_labels[i].setText(f"{val:.1f}")
-        self._submit(pbctrl.set_eq, None, self._on_error, bands)
+        self._submit(pbctrl.set_eq, None, lambda exc: self._on_write_error("equalizer", exc), bands)
 
     def _apply_eq_preset(self, name: str) -> None:
         bands = EQ_PRESETS[name]
@@ -681,12 +712,12 @@ class MainWindow(QMainWindow):
             self._apply_eq(bands)
         finally:
             self._loading = False
-        self._submit(pbctrl.set_eq, None, self._on_error, bands)
+        self._submit(pbctrl.set_eq, None, lambda exc: self._on_write_error("equalizer", exc), bands)
 
     def _set_balance(self) -> None:
         value = self._balance_slider.value()
         self._balance_label.setText(str(value))
-        self._submit(pbctrl.set_balance, None, self._on_error, value)
+        self._submit(pbctrl.set_balance, None, lambda exc: self._on_write_error("balance", exc), value)
 
     def _balance_value_changed(self) -> None:
         # Same as _eq_value_changed: apply arrow-key edits, ignore refresh echo.
@@ -700,7 +731,7 @@ class MainWindow(QMainWindow):
             return
         left = self._gesture_combos["left"].currentData()
         right = self._gesture_combos["right"].currentData()
-        self._submit(pbctrl.set_gesture_control, None, self._on_error, left, right)
+        self._submit(pbctrl.set_gesture_control, None, lambda exc: self._on_write_error("gestures", exc), left, right)
 
     def _set_anc_loop(self) -> None:
         if self._loading:
@@ -709,7 +740,7 @@ class MainWindow(QMainWindow):
         if sum(modes.values()) < 2:
             self._set_status("disconnected", "Loop needs at least 2 modes")
             return  # pbpctrl requires at least 2 modes
-        self._submit(pbctrl.set_anc_loop, None, self._on_error, modes)
+        self._submit(pbctrl.set_anc_loop, None, lambda exc: self._on_write_error("ANC loop", exc), modes)
 
     def _set_bool(self, name: str, value: bool) -> None:
         if self._loading:
@@ -719,7 +750,7 @@ class MainWindow(QMainWindow):
         self._submit(
             pbctrl.set_bool_verified,
             lambda _r, n=name, v=value: self._on_bool_set(n, v),
-            lambda msg, n=name: self._on_bool_error(n, msg),
+            lambda exc, n=name: self._on_bool_error(n, exc),
             name,
             value,
         )
@@ -728,7 +759,7 @@ class MainWindow(QMainWindow):
         label = BOOL_LABELS.get(name, name)
         self._set_status("connected", f"Set {label}: {'on' if value else 'off'}")
 
-    def _on_bool_error(self, name: str, message: str) -> None:
+    def _on_bool_error(self, name: str, exc: Exception) -> None:
         # Revert the checkbox to its prior state so the UI never lies about a
         # setting that didn't reach the buds, and surface a specific, honest
         # status instead of the misleading "Not connected" (the device *is*
@@ -740,12 +771,11 @@ class MainWindow(QMainWindow):
             cb.blockSignals(False)
         label = BOOL_LABELS.get(name, name)
         self.refresh_btn.setEnabled(True)
-        reason = (message or "").strip().replace("\n", " ")[:120]
-        self._set_status(
-            "disconnected",
-            f"Failed to set {label}" + (f": {reason}" if reason else ""),
-        )
-        self.status_label.setToolTip(message)
+        if isinstance(exc, NoDeviceError):
+            self._set_status("disconnected", "Not connected")
+        else:
+            self._set_status("disconnected", f"Failed to set {label}: {self._short(str(exc))}")
+        self.status_label.setToolTip(str(exc))
 
     # ------------------------------------------------------------- status --
 
@@ -759,14 +789,115 @@ class MainWindow(QMainWindow):
         self.status_label.style().polish(self.status_label)
         self.status_label.setText(text)
 
-    def _on_error(self, message: str) -> None:
+    def _on_error(self, exc: Exception) -> None:
+        # A missing device is "Not connected"; anything else is a real failure
+        # and should say so rather than masquerade as a disconnect.
         self.refresh_btn.setEnabled(True)
-        self._set_status("disconnected", "Not connected")
-        self.status_label.setToolTip(message)
+        msg = str(exc)
+        if isinstance(exc, NoDeviceError):
+            self._set_status("disconnected", "Not connected")
+        else:
+            self._set_status("disconnected", f"Error: {self._short(msg)}")
+        self.status_label.setToolTip(msg)
 
-    def _on_battery_error(self, message: str) -> None:
+    def _on_write_error(self, label: str, exc: Exception) -> None:
+        """Honest error path for non-bool setters (EQ/balance/ANC/gestures).
+
+        A missing device means the buds dropped (show "Not connected"); any
+        other failure is a refused/failed write and should name the setting and
+        reason instead of the old misleading "Not connected".
+        """
+        self.refresh_btn.setEnabled(True)
+        msg = str(exc)
+        if isinstance(exc, NoDeviceError):
+            self._set_status("disconnected", "Not connected")
+        else:
+            self._set_status("disconnected", f"Failed to set {label}: {self._short(msg)}")
+        self.status_label.setToolTip(msg)
+
+    def _on_battery_error(self, exc: Exception) -> None:
         # Battery polling failure should not nuke the whole UI state.
-        self.status_label.setToolTip(message)
+        self.status_label.setToolTip(str(exc))
+
+    # ------------------------------------------------------- tray / window --
+
+    def _setup_tray(self) -> None:
+        """Create the system-tray icon + menu, when the platform has a tray.
+
+        Keeping the app resident in the tray is what makes the low-battery
+        notifications useful: the 30s poll keeps running while the window is
+        hidden, so alerts fire even after the user "closes" the window.
+        """
+        self._tray = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self._tray = QSystemTrayIcon(QIcon(str(_APP_ICON_PNG)), self)
+        self._tray.setToolTip("Pixel Buds Pro")
+        menu = QMenu()
+        toggle = menu.addAction("Show/Hide")
+        toggle.triggered.connect(self._toggle_window)
+        refresh = menu.addAction("Refresh")
+        refresh.triggered.connect(self.refresh_all)
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit")
+        quit_action.triggered.connect(self._quit)
+        self._tray.setContextMenu(menu)
+        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.show()
+
+    def _on_tray_activated(self, reason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._toggle_window()
+
+    def _toggle_window(self) -> None:
+        if self.isVisible():
+            self.hide()
+        else:
+            self._show_window()
+
+    def _show_window(self) -> None:
+        self.show()
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.raise_()
+        self.activateWindow()
+
+    def _quit(self) -> None:
+        if self._tray is not None:
+            self._tray.hide()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
+    def closeEvent(self, event) -> None:
+        if self._close_to_tray and self._tray is not None and self._tray.isVisible():
+            event.ignore()
+            self.hide()
+            if not self._tray_hint_shown:
+                self._tray.showMessage(
+                    "Pixel Buds Pro",
+                    "Still running in the tray. Use the tray icon to restore or quit.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    3000,
+                )
+                self._tray_hint_shown = True
+        else:
+            event.accept()
+
+    def _update_tray_tooltip(self, report) -> None:
+        if self._tray is None:
+            return
+        parts = []
+        for key, label in (("left", "L"), ("right", "R"), ("case", "Case")):
+            info = getattr(report, key)
+            if info is not None and info.level is not None:
+                parts.append(f"{label} {info.level}%")
+        tooltip = "Pixel Buds Pro"
+        if parts:
+            tooltip += " — " + "  ".join(parts)
+        self._tray.setToolTip(tooltip)
 
     # ----------------------------------------------------------- plumbing --
 
