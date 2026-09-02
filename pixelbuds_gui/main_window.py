@@ -191,6 +191,12 @@ class MainWindow(QMainWindow):
         threshold = self._settings.value("notify_threshold", 20, type=int)  # type: ignore[arg-type]  # PySide6 stub limitation
         self._low_battery = LowBatteryMonitor(threshold=threshold)
 
+        # Device picker: which pair to target. Persisted as a MAC, or "" for
+        # pbpctrl's auto-detect. DEFAULT_DEVICE threads the MAC through every
+        # pbpctrl call without touching each call site in this file.
+        self._device_mac = str(self._settings.value("device_mac", "") or "")
+        pbctrl.DEFAULT_DEVICE = self._device_mac or None
+
         # Only expose the ANC modes the installed pbpctrl can actually set
         # (0.1.8 lacks "adaptive").  Detected once, synchronously -- this is a
         # fast `--help` subprocess, not a Bluetooth round-trip.
@@ -258,6 +264,7 @@ class MainWindow(QMainWindow):
         self._body_layout.setContentsMargins(0, 0, 0, 0)
         self._body_layout.setSpacing(10)
 
+        self._build_device_section(self._body_layout)
         self._build_battery_section(self._body_layout)
         self._build_anc_section(self._body_layout)
         self._build_eq_section(self._body_layout)
@@ -290,6 +297,30 @@ class MainWindow(QMainWindow):
         return lbl
 
     # ----------------------------------------------------------- sections --
+
+    def _build_device_section(self, root: QVBoxLayout) -> None:
+        inner = self._add_card(root)
+        inner.addWidget(self._section_title("DEVICE"))
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self._device_combo = QComboBox()
+        self._device_combo.setEditable(True)
+        self._device_combo.setMinimumWidth(220)
+        self._device_combo.setToolTip(
+            "Target buds. \"(auto)\" lets pbpctrl auto-detect the paired buds; "
+            "pick a known device or type a Bluetooth MAC (AA:BB:CC:DD:EE:FF) "
+            "and press Enter to target a specific pair."
+        )
+        self._device_combo.currentIndexChanged.connect(self._device_changed)
+        self._device_combo.lineEdit().editingFinished.connect(self._device_edited)
+        row.addWidget(self._device_combo, 1)
+        scan = QPushButton("Scan")
+        scan.setProperty("class", "small")
+        scan.setToolTip("Re-read known Bluetooth devices")
+        scan.clicked.connect(self._populate_devices)
+        row.addWidget(scan)
+        inner.addLayout(row)
+        self._populate_devices()
 
     def _build_battery_section(self, root: QVBoxLayout) -> None:
         inner = self._add_card(root)
@@ -494,9 +525,75 @@ class MainWindow(QMainWindow):
         self._serial_label.setObjectName("muted")
         inner.addWidget(self._serial_label)
 
+    # ------------------------------------------------------------- device --
+
+    def _populate_devices(self) -> None:
+        current = self._device_mac
+        self._device_combo.blockSignals(True)
+        try:
+            self._device_combo.clear()
+            self._device_combo.addItem("(auto)", None)
+            seen = set()
+            for mac, name in pbctrl.list_devices():
+                if mac in seen:
+                    continue
+                seen.add(mac)
+                self._device_combo.addItem(f"{name} ({mac})" if name else mac, mac)
+            idx = self._device_combo.findData(current)
+            # Keep the persisted device selectable even when it's not in the
+            # scan (e.g. buds asleep / bluetoothctl missing).
+            if idx < 0 and current:
+                self._device_combo.addItem(current, current)
+                idx = self._device_combo.count() - 1
+            self._device_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        finally:
+            self._device_combo.blockSignals(False)
+
+    def _device_changed(self, index: int) -> None:
+        if index < 0:
+            return
+        mac = self._device_combo.itemData(index)
+        self._set_device(mac or "")
+
+    def _device_edited(self) -> None:
+        text = self._device_combo.currentText().strip()
+        if text in ("", "(auto)"):
+            self._set_device("")
+        elif pbctrl.is_mac_address(text):
+            self._set_device(text)
+
+    def _set_device(self, mac: str) -> None:
+        mac = (mac or "").strip()
+        if mac and not pbctrl.is_mac_address(mac):
+            return  # ignore malformed / half-typed input
+        if mac == self._device_mac:
+            return
+        self._device_mac = mac
+        pbctrl.DEFAULT_DEVICE = mac or None
+        self._settings.setValue("device_mac", mac)
+
+        # Keep the combo consistent: ensure the MAC is an item and select it,
+        # or fall back to the "(auto)" entry.
+        self._device_combo.blockSignals(True)
+        try:
+            if mac:
+                idx = self._device_combo.findData(mac)
+                if idx < 0:
+                    self._device_combo.addItem(mac, mac)
+                    idx = self._device_combo.count() - 1
+            else:
+                idx = 0
+            self._device_combo.setCurrentIndex(idx)
+        finally:
+            self._device_combo.blockSignals(False)
+
+        if not self._loading:
+            self.refresh_all()
+
     # ------------------------------------------------------------ refresh --
 
     def refresh_all(self) -> None:
+        self._battery_timer.start()  # resume polling (undoes disconnect backoff)
         self._set_status("busy", "Refreshing…")
         self.refresh_btn.setEnabled(False)
         self._submit(self._load_all, self._apply_all, self._on_error)
@@ -795,6 +892,7 @@ class MainWindow(QMainWindow):
         self.refresh_btn.setEnabled(True)
         msg = str(exc)
         if isinstance(exc, NoDeviceError):
+            self._battery_timer.stop()  # back off until a manual refresh re-arms it
             self._set_status("disconnected", "Not connected")
         else:
             self._set_status("disconnected", f"Error: {self._short(msg)}")
@@ -818,6 +916,12 @@ class MainWindow(QMainWindow):
     def _on_battery_error(self, exc: Exception) -> None:
         # Battery polling failure should not nuke the whole UI state.
         self.status_label.setToolTip(str(exc))
+        if isinstance(exc, NoDeviceError):
+            # The device dropped: stop the 30s poll rather than hammering the
+            # missing adapter. refresh_all() re-arms it on the next manual
+            # refresh, so polling resumes once the buds are back in range.
+            self._battery_timer.stop()
+            self._set_status("disconnected", "Not connected")
 
     # ------------------------------------------------------- tray / window --
 

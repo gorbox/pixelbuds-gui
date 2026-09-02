@@ -250,9 +250,12 @@ from PySide6.QtCore import QTimer  # noqa: E402
 QTimer.singleShot(1500, app.quit)
 app.exec()
 
-# Status should have been set to disconnected by the error path.
+# Status should have been set to disconnected by the error path.  Which text
+# appears depends on the host: "Not connected" when pbpctrl is installed but no
+# buds/adaptor are reachable, or "Error: pbpctrl not found on PATH..." when
+# pbpctrl isn't installed (e.g. on a CI runner).
 txt = win.status_label.text()
-assert txt == "Not connected", f"unexpected status: {txt!r}"
+assert txt == "Not connected" or txt.startswith("Error:"), f"unexpected status: {txt!r}"
 assert win.refresh_btn.isEnabled()
 
 print("GUI construction + async error path: OK  (status =", txt + ")")
@@ -290,3 +293,93 @@ assert pbctrl._is_no_device_message(
 assert not pbctrl._is_no_device_message("status: Unimplemented (12)")
 
 print("tray + honest-error classification: OK")
+
+
+# --- device picker --------------------------------------------------------- #
+import os as _os
+import tempfile as _tf
+
+assert pbctrl.is_mac_address("AA:BB:CC:DD:EE:FF")
+assert not pbctrl.is_mac_address("AA:BB:CC:DD:EE")   # short
+assert not pbctrl.is_mac_address("")                   # empty
+assert not pbctrl.is_mac_address("not-a-mac")
+
+# list_devices parses `bluetoothctl devices` output (names may contain spaces).
+_orig_which = pbctrl.shutil.which
+_orig_run = pbctrl.subprocess.run
+pbctrl.shutil.which = lambda n: "/usr/bin/bluetoothctl" if n == "bluetoothctl" else None
+pbctrl.subprocess.run = lambda *a, **k: SimpleNamespace(
+    returncode=0,
+    stdout=(
+        "Device AA:BB:CC:DD:EE:FF Pixel Buds Pro\n"
+        "Device 11:22:33:44:55:66 Office Speaker\n"
+    ),
+    stderr="",
+)
+try:
+    devs = pbctrl.list_devices()
+finally:
+    pbctrl.shutil.which = _orig_which
+    pbctrl.subprocess.run = _orig_run
+assert devs == [
+    ("AA:BB:CC:DD:EE:FF", "Pixel Buds Pro"),
+    ("11:22:33:44:55:66", "Office Speaker"),
+], devs
+
+# Isolate QSettings so the picker test never writes the user's real config
+# (the smoke test must not mutate state).
+from PySide6.QtCore import QSettings  # noqa: E402
+
+_tmp = _tf.mkdtemp()
+win._settings = QSettings(_os.path.join(_tmp, "test.conf"), QSettings.Format.IniFormat)
+
+# Selecting a MAC targets it and persists it; clearing returns to auto-detect.
+win._loading = True  # suppress the refresh_all() side-effect in _set_device
+try:
+    win._set_device("AA:BB:CC:DD:EE:FF")
+finally:
+    win._loading = False
+assert pbctrl.DEFAULT_DEVICE == "AA:BB:CC:DD:EE:FF"
+assert win._device_mac == "AA:BB:CC:DD:EE:FF"
+assert win._device_combo.findData("AA:BB:CC:DD:EE:FF") >= 0
+
+win._loading = True
+try:
+    win._set_device("")
+finally:
+    win._loading = False
+assert pbctrl.DEFAULT_DEVICE is None
+assert win._device_mac == ""
+
+win._loading = True
+try:
+    win._set_device("not-a-mac")
+finally:
+    win._loading = False
+assert pbctrl.DEFAULT_DEVICE is None  # malformed input rejected
+
+print("device picker: OK")
+
+
+# --- poll backoff ---------------------------------------------------------- #
+# A NoDeviceError on the battery poll must stop the 30s timer and surface a
+# disconnect; a transient error must leave the poll running.
+win._on_battery_error(pbctrl.NoDeviceError("no default adapter"))
+assert win._battery_timer.isActive() is False, "NoDeviceError should pause the poll"
+assert win.status_label.text() == "Not connected"
+
+win._battery_timer.start()  # simulate a resumed poll
+win._on_battery_error(pbctrl.PbctrlError("pbpctrl timed out after 20s"))
+assert win._battery_timer.isActive() is True, "transient error must keep polling"
+
+# refresh_all() re-arms the poll (resume), verified without the async worker.
+win._battery_timer.stop()
+_orig_submit = win._submit
+win._submit = lambda *a, **k: None
+try:
+    win.refresh_all()
+finally:
+    win._submit = _orig_submit
+assert win._battery_timer.isActive() is True, "manual refresh should resume the poll"
+
+print("poll backoff: OK")

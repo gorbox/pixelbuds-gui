@@ -31,6 +31,9 @@ Bluetooth RFCOMM. This project is the GUI on top of that.
 - **System tray** — runs resident in the tray; closing the window minimizes it
   instead of quitting (toggleable in Settings) so alerts keep firing while
   hidden. Tray menu: Show/Hide, Refresh, Quit; tooltip shows live battery.
+- **Device picker** — target a specific pair when more than one is paired: pick
+  from known Bluetooth devices, or type a MAC address. Persisted across
+  launches; "(auto)" keeps pbpctrl's own auto-detection.
 - **Honest errors** — a refused/failed change names the setting and reason
   (e.g. "Failed to set equalizer: status: Unimplemented (12)"), while a
   genuinely missing device shows "Not connected" — no more conflating the two.

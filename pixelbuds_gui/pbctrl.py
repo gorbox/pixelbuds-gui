@@ -100,6 +100,47 @@ def _run(*args: str, device: Optional[str] = None, timeout: float = 20.0) -> str
     return proc.stdout
 
 
+# A well-formed Bluetooth MAC address (e.g. "AA:BB:CC:DD:EE:FF").
+_MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$")
+
+
+def is_mac_address(text: str) -> bool:
+    """True if ``text`` is a well-formed Bluetooth MAC address."""
+    return bool(_MAC_RE.match((text or "").strip()))
+
+
+def list_devices(timeout: float = 5.0) -> list[tuple[str, str]]:
+    """Return known Bluetooth devices as ``[(mac, name), ...]`` via bluetoothctl.
+
+    Best-effort: returns ``[]`` when ``bluetoothctl`` is absent, times out, or
+    finds nothing. This lists *known* devices (no active scan), which is what a
+    device picker needs — the buds must already be paired to the host for
+    pbpctrl to reach them anyway. A device name may itself contain spaces, so
+    the parser splits only the first two fields (``Device <mac> <name…>``).
+    """
+    binary = shutil.which("bluetoothctl")
+    if not binary:
+        return []
+    try:
+        proc = subprocess.run(
+            [binary, "devices"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    found: list[tuple[str, str]] = []
+    for raw in proc.stdout.splitlines():
+        parts = raw.split(" ", 2)
+        if len(parts) == 3 and parts[0] == "Device" and is_mac_address(parts[1]):
+            found.append((parts[1], parts[2].strip()))
+    return found
+
+
 # The four ANC modes that participate in the ANC gesture loop.
 # NOTE: order matters for `set anc-gesture-loop <off> <active> <aware> [<adaptive>]`.
 # The released pbpctrl 0.1.8 (what the AUR ships) only knows `off`/`active`/
